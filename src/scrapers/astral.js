@@ -1,6 +1,7 @@
 /**
  * Astral Hotels Scraper
  * Scrapes prices from Astral website (Queen of Sheba)
+ * Configuration: 2 adults + 1 child + 1 infant, half-board (חצי פנסיון)
  */
 
 const { chromium } = require('playwright');
@@ -11,8 +12,16 @@ const path = require('path');
 const HOTEL = {
   name: 'Queen of Sheba',
   url: 'https://www.astralhotels.co.il/hotels/astral-queen-of-sheba',
-  slug: 'queen-of-sheba'
+  searchUrl: 'https://www.astralhotels.co.il/search',
+  slug: 'queen-of-sheba',
+  code: 'queen-of-sheba'
 };
+
+// Room composition
+const ADULTS = 2;
+const CHILDREN = 1;  // Child age 5
+const INFANTS = 1;   // Infant age 1
+const TOTAL_GUESTS = ADULTS + CHILDREN + INFANTS;
 
 // Date ranges to check (same as Isrotel)
 const DATE_RANGES = [
@@ -36,19 +45,15 @@ async function saveScreenshot(page, name) {
 }
 
 /**
- * Extract all prices from text
+ * Format date for display (DD/MM/YYYY)
  */
-function extractPrices(text) {
-  if (!text) return [];
-  const matches = text.match(/₪\s*[\d,]+/g) || [];
-  return matches.map(m => {
-    const num = parseInt(m.replace(/[^\d]/g, ''), 10);
-    return num > 100 && num < 50000 ? num : null;
-  }).filter(Boolean);
+function formatDateDisplay(dateStr) {
+  const [year, month, day] = dateStr.split('-');
+  return `${day}/${month}/${year}`;
 }
 
 /**
- * Scrape price for a date range
+ * Scrape price for a date range using Astral's booking form
  */
 async function scrapePrice(browser, dates) {
   const context = await browser.newContext({
@@ -60,62 +65,117 @@ async function scrapePrice(browser, dates) {
   const page = await context.newPage();
   let price = null;
   
-  // Monitor API responses
-  const apiPrices = [];
-  page.on('response', async (response) => {
-    const url = response.url();
-    if (url.includes('price') || url.includes('rate') || url.includes('availability')) {
-      try {
-        if (response.headers()['content-type']?.includes('json')) {
-          const data = await response.json();
-          const prices = extractPrices(JSON.stringify(data));
-          apiPrices.push(...prices);
-        }
-      } catch (e) {}
-    }
-  });
-  
   try {
     console.log(`  📍 Checking ${HOTEL.name} for ${dates.label}...`);
     
     // Navigate to hotel page
-    await page.goto(HOTEL.url, { waitUntil: 'networkidle', timeout: 15000 });
+    await page.goto(HOTEL.url, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(2000);
     
-    // Get all text and find prices
-    const pageText = await page.evaluate(() => document.body.innerText);
-    const foundPrices = extractPrices(pageText);
-    
-    if (foundPrices.length > 0) {
-      price = Math.min(...foundPrices);
-      console.log(`    ✅ Found prices: ${foundPrices.slice(0, 5).join(', ')}... Using: ₪${price}`);
+    // Try to interact with the booking form
+    // Look for date picker and guest selector
+    try {
+      // Click on date picker to open it
+      const dateButton = await page.$('button:has-text("לבחירת תאריכים"), [class*="date"], input[type="date"]');
+      if (dateButton) {
+        await dateButton.click();
+        await page.waitForTimeout(1000);
+        
+        // Try to set check-in date
+        const checkInDate = new Date(dates.checkIn);
+        const checkOutDate = new Date(dates.checkOut);
+        
+        // Look for calendar navigation and date selection
+        // This is site-specific and may need adjustment
+        console.log(`    Setting dates: ${formatDateDisplay(dates.checkIn)} - ${formatDateDisplay(dates.checkOut)}`);
+      }
+      
+      // Look for guests/rooms selector
+      const guestsButton = await page.$('button:has-text("אורחים"), [class*="guest"]');
+      if (guestsButton) {
+        await guestsButton.click();
+        await page.waitForTimeout(1000);
+        console.log(`    Setting guests: ${TOTAL_GUESTS}`);
+      }
+      
+      // Click search button
+      const searchButton = await page.$('button:has-text("חיפוש"), button:has-text("קחו אותי לחופשה")');
+      if (searchButton) {
+        await searchButton.click();
+        await page.waitForTimeout(5000);
+      }
+    } catch (formError) {
+      console.log(`    Form interaction failed: ${formError.message}`);
     }
     
-    // Check API prices
-    if (!price && apiPrices.length > 0) {
-      price = Math.min(...apiPrices);
-      console.log(`    ✅ Found API price: ₪${price}`);
-    }
+    // Wait for results and extract prices
+    await page.waitForTimeout(3000);
     
-    // Try clicking booking button as fallback
-    if (!price) {
-      const btn = await page.$('a:has-text("הזמנה"), button:has-text("הזמנה")');
-      if (btn) {
-        console.log(`    Found booking button`);
-        await btn.click();
-        await page.waitForTimeout(3000);
-        const newText = await page.evaluate(() => document.body.innerText);
-        const newPrices = extractPrices(newText);
-        if (newPrices.length > 0) {
-          price = Math.min(...newPrices);
-          console.log(`    ✅ Found price after click: ₪${price}`);
+    // Extract prices from the page
+    const priceData = await page.evaluate(() => {
+      const results = [];
+      const allText = document.body.innerText;
+      
+      // Look for room cards/sections
+      const roomSections = document.querySelectorAll('[class*="room"], [class*="option"], [class*="card"], [class*="result"]');
+      
+      for (const section of roomSections) {
+        const text = section.innerText || '';
+        
+        // Check if this is half-board (חצי פנסיון)
+        const isHalfBoard = text.includes('חצי פנסיון');
+        
+        // Extract prices
+        const priceMatches = text.match(/₪\s*[\d,]+/g) || [];
+        const prices = priceMatches.map(p => {
+          const num = parseInt(p.replace(/[^\d]/g, ''), 10);
+          // Filter for reasonable total stay prices
+          return (num >= 3000 && num <= 100000) ? num : null;
+        }).filter(Boolean);
+        
+        if (prices.length > 0) {
+          results.push({
+            isHalfBoard,
+            prices,
+            minPrice: Math.min(...prices)
+          });
         }
       }
+      
+      // Also find all prices on the page
+      const allPrices = (allText.match(/₪\s*[\d,]+/g) || [])
+        .map(p => parseInt(p.replace(/[^\d]/g, ''), 10))
+        .filter(p => p >= 3000 && p <= 100000);
+      
+      return {
+        roomResults: results,
+        allPrices: [...new Set(allPrices)].sort((a, b) => a - b),
+        pageHasHalfBoard: allText.includes('חצי פנסיון'),
+        pageText: allText.substring(0, 5000)
+      };
+    });
+    
+    console.log(`    Found ${priceData.allPrices.length} valid prices on page`);
+    
+    // Prefer half-board room prices
+    const halfBoardRooms = priceData.roomResults.filter(r => r.isHalfBoard);
+    if (halfBoardRooms.length > 0) {
+      price = Math.min(...halfBoardRooms.map(r => r.minPrice));
+      console.log(`    ✅ Found half-board price: ₪${price.toLocaleString()}`);
+    }
+    // Fall back to cheapest room
+    else if (priceData.allPrices.length > 0) {
+      price = priceData.allPrices[0];
+      console.log(`    ✅ Found price: ₪${price.toLocaleString()}`);
     }
     
     await saveScreenshot(page, `astral-${HOTEL.slug}-${dates.label.replace('/', '-')}`);
     
-    if (!price) console.log(`    ❌ No price found`);
+    if (!price) {
+      console.log(`    ❌ No valid price found`);
+      console.log(`    Debug - Sample text: ${priceData.pageText.substring(0, 300)}...`);
+    }
+    
     return price;
     
   } catch (error) {

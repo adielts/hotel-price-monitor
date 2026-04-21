@@ -1,25 +1,28 @@
 /**
  * Isrotel Hotels Scraper
  * Scrapes prices from Isrotel website for specified hotels and dates
+ * Configuration: 2 adults + 1 child + 1 infant, half-board (חצי פנסיון)
  */
 
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-// Hotels to monitor
+// Room composition: 2 adults + 1 child + 1 infant
+// Format from Isrotel: adults-childAge-infantAge (or adults-child-infant)
+const ROOM_COMPOSITION = '2-1-1'; // Matching the URL format from user
+
+// Hotels to monitor (Isrotel chain)
 const HOTELS = [
   {
     name: 'המלך שלמה',
-    url: 'https://www.isrotel.co.il/isrotel-hotels/eilat-hotels/%D7%99%D7%A9%D7%A8%D7%95%D7%98%D7%9C-%D7%94%D7%9E%D7%9C%D7%9A-%D7%A9%D7%9C%D7%9E%D7%94/',
-    slug: 'king-solomon',
-    hotelCode: 'EILKS'
+    code: 'KS',
+    slug: 'king-solomon'
   },
   {
     name: 'רויאל גארדן',
-    url: 'https://www.isrotel.co.il/isrotel-hotels/eilat-hotels/%D7%99%D7%A9%D7%A8%D7%95%D7%98%D7%9C-%D7%A8%D7%95%D7%99%D7%90%D7%9C-%D7%92%D7%90%D7%A8%D7%93%D7%9F/',
-    slug: 'royal-garden',
-    hotelCode: 'EILRG'
+    code: 'RG',
+    slug: 'royal-garden'
   }
 ];
 
@@ -45,31 +48,31 @@ async function saveScreenshot(page, name) {
 }
 
 /**
- * Extract all prices from text
- */
-function extractPrices(text) {
-  if (!text) return [];
-  const matches = text.match(/₪\s*[\d,]+/g) || [];
-  return matches.map(m => {
-    const num = parseInt(m.replace(/[^\d]/g, ''), 10);
-    return num > 100 && num < 50000 ? num : null;
-  }).filter(Boolean);
-}
-
-/**
- * Format date for URL (DD/MM/YYYY)
+ * Format date for Isrotel URL (DD-MM-YYYY)
  */
 function formatDateForUrl(dateStr) {
   const [year, month, day] = dateStr.split('-');
-  return `${day}/${month}/${year}`;
+  return `${day}-${month}-${year}`;
+}
+
+/**
+ * Build Isrotel search URL
+ * Format: https://www.isrotel.co.il/searchresult/חדר-במלון/?SearchQuery={code}/{checkIn}/{checkOut}/{composition}/-1
+ */
+function buildSearchUrl(hotelCode, checkIn, checkOut) {
+  const checkInFormatted = formatDateForUrl(checkIn);
+  const checkOutFormatted = formatDateForUrl(checkOut);
+  const searchQuery = `${hotelCode}/${checkInFormatted}/${checkOutFormatted}/${ROOM_COMPOSITION}/-1`;
+  return `https://www.isrotel.co.il/searchresult/%D7%97%D7%93%D7%A8-%D7%91%D7%9E%D7%9C%D7%95%D7%9F/?SearchQuery=${searchQuery}`;
 }
 
 /**
  * Scrape price for a single hotel and date range
+ * Targets half-board (חצי פנסיון) prices, gets cheapest room option
  * @param {object} browser - Playwright browser instance
  * @param {object} hotel - Hotel info
  * @param {object} dates - Date range
- * @returns {number|null} - Price or null if not found
+ * @returns {number|null} - Total price for stay or null if not found
  */
 async function scrapeHotelPrice(browser, hotel, dates) {
   const context = await browser.newContext({
@@ -81,84 +84,85 @@ async function scrapeHotelPrice(browser, hotel, dates) {
   const page = await context.newPage();
   let price = null;
   
-  // Monitor API responses
-  const apiPrices = [];
-  page.on('response', async (response) => {
-    const url = response.url();
-    if (url.includes('price') || url.includes('rate') || url.includes('availability')) {
-      try {
-        if (response.headers()['content-type']?.includes('json')) {
-          const data = await response.json();
-          const prices = extractPrices(JSON.stringify(data));
-          apiPrices.push(...prices);
-        }
-      } catch (e) {}
-    }
-  });
-  
   try {
     console.log(`  📍 Checking ${hotel.name} for ${dates.label}...`);
     
-    // Format dates
-    const checkIn = formatDateForUrl(dates.checkIn);
-    const checkOut = formatDateForUrl(dates.checkOut);
+    // Build search URL with room composition
+    const searchUrl = buildSearchUrl(hotel.code, dates.checkIn, dates.checkOut);
+    console.log(`    URL: ${searchUrl}`);
     
-    // Try direct booking URLs
-    const bookingUrls = [
-      `https://www.isrotel.co.il/booking-results/?checkin=${checkIn}&checkout=${checkOut}&adults=2&children=0`,
-      hotel.url
-    ];
+    await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.waitForTimeout(3000);
     
-    for (const url of bookingUrls) {
-      if (price) break;
+    // Wait for room results to load
+    await page.waitForSelector('.room-card, .search-result, [class*="room"], [class*="price"]', { timeout: 10000 }).catch(() => {});
+    
+    // Try to find half-board (חצי פנסיון) prices
+    // The page structure shows prices in different formats
+    const priceData = await page.evaluate(() => {
+      const results = [];
       
-      try {
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
-        await page.waitForTimeout(2000);
+      // Look for room cards/sections
+      const roomSections = document.querySelectorAll('[class*="room"], [class*="option"], .search-result-item, .hotel-room');
+      
+      for (const section of roomSections) {
+        const text = section.innerText || '';
         
-        // Get all text and find prices
-        const pageText = await page.evaluate(() => document.body.innerText);
-        const foundPrices = extractPrices(pageText);
+        // Check if this is half-board (חצי פנסיון)
+        const isHalfBoard = text.includes('חצי פנסיון');
         
-        if (foundPrices.length > 0) {
-          price = Math.min(...foundPrices);
-          console.log(`    ✅ Found prices: ${foundPrices.slice(0, 5).join(', ')}... Using: ₪${price}`);
-          break;
+        // Extract all prices from this section
+        const priceMatches = text.match(/₪\s*[\d,]+/g) || [];
+        const prices = priceMatches.map(p => {
+          const num = parseInt(p.replace(/[^\d]/g, ''), 10);
+          // Filter for reasonable total stay prices (4 nights for 4 people)
+          return (num >= 3000 && num <= 100000) ? num : null;
+        }).filter(Boolean);
+        
+        if (prices.length > 0) {
+          results.push({
+            isHalfBoard,
+            prices,
+            minPrice: Math.min(...prices)
+          });
         }
-        
-        // Check API prices
-        if (apiPrices.length > 0) {
-          price = Math.min(...apiPrices);
-          console.log(`    ✅ Found API price: ₪${price}`);
-          break;
-        }
-        
-      } catch (e) {
-        console.log(`    ⚠️ URL timeout`);
       }
-    }
+      
+      // Also try to find prices directly on the page
+      const allText = document.body.innerText;
+      const allPrices = (allText.match(/₪\s*[\d,]+/g) || [])
+        .map(p => parseInt(p.replace(/[^\d]/g, ''), 10))
+        .filter(p => p >= 3000 && p <= 100000);
+      
+      return {
+        roomResults: results,
+        allPrices: [...new Set(allPrices)].sort((a, b) => a - b),
+        pageHasHalfBoard: allText.includes('חצי פנסיון'),
+        pageText: allText.substring(0, 5000) // For debugging
+      };
+    });
     
-    // Try clicking booking button as fallback
-    if (!price) {
-      try {
-        await page.goto(hotel.url, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        const btn = await page.$('a:has-text("הזמנה")');
-        if (btn) {
-          await btn.click();
-          await page.waitForTimeout(3000);
-          const pageText = await page.evaluate(() => document.body.innerText);
-          const foundPrices = extractPrices(pageText);
-          if (foundPrices.length > 0) {
-            price = Math.min(...foundPrices);
-            console.log(`    ✅ Found price after click: ₪${price}`);
-          }
-        }
-      } catch (e) {}
+    console.log(`    Found ${priceData.allPrices.length} valid prices on page`);
+    
+    // Prefer half-board room prices
+    const halfBoardRooms = priceData.roomResults.filter(r => r.isHalfBoard);
+    if (halfBoardRooms.length > 0) {
+      price = Math.min(...halfBoardRooms.map(r => r.minPrice));
+      console.log(`    ✅ Found half-board price: ₪${price.toLocaleString()}`);
+    } 
+    // Fall back to cheapest room if half-board not specifically found
+    else if (priceData.allPrices.length > 0) {
+      price = priceData.allPrices[0]; // Cheapest valid price
+      console.log(`    ✅ Found price: ₪${price.toLocaleString()}`);
     }
     
     await saveScreenshot(page, `isrotel-${hotel.slug}-${dates.label.replace('/', '-')}`);
     
-    if (!price) console.log(`    ❌ No price found`);
+    if (!price) {
+      console.log(`    ❌ No valid price found`);
+      console.log(`    Debug - Sample text: ${priceData.pageText.substring(0, 500)}...`);
+    }
+    
     return price;
     
   } catch (error) {
