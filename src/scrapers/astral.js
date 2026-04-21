@@ -130,25 +130,12 @@ async function scrapePrice(browser, dates) {
         console.log(`    Looking for day ${checkInDay} in June...`);
         
         // Click on the check-in date
-        const checkInClicked = await page.evaluate((day, month) => {
-          // Find the June 2026 section first
-          const monthLabels = document.querySelectorAll('*');
-          let juneSection = null;
-          
-          for (const el of monthLabels) {
-            const text = el.innerText || '';
-            if ((text.includes('יוני 2026') || text.includes('June 2026')) && text.length < 20) {
-              // Found the month label, now find the calendar grid near it
-              juneSection = el.closest('[class*="month"]') || el.parentElement?.parentElement;
-              break;
-            }
-          }
-          
-          // Now find day buttons - they contain just the number
-          const dayButtons = document.querySelectorAll('button, [role="button"], abbr');
+        const checkInClicked = await page.evaluate(({ day }) => {
+          // Find day buttons - they contain just the number
+          const dayButtons = document.querySelectorAll('button, [role="button"], abbr, td');
           for (const btn of dayButtons) {
             const text = (btn.innerText || btn.textContent || '').trim();
-            // Match exact day number
+            // Match exact day number (could be "7" or "7\nholiday text")
             if (text === String(day) || text.startsWith(String(day) + '\n')) {
               // Check this isn't disabled
               const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
@@ -160,7 +147,7 @@ async function scrapePrice(browser, dates) {
             }
           }
           return null;
-        }, checkInDay, 6); // 6 = June (0-indexed)
+        }, { day: checkInDay });
         
         if (checkInClicked) {
           console.log(`    ✓ ${checkInClicked}`);
@@ -173,8 +160,8 @@ async function scrapePrice(browser, dates) {
         const checkOutDay = checkOut.getDate(); // 11
         console.log(`    Looking for checkout day ${checkOutDay}...`);
         
-        const checkoutClicked = await page.evaluate((day) => {
-          const dayButtons = document.querySelectorAll('button, [role="button"], abbr');
+        const checkoutClicked = await page.evaluate(({ day }) => {
+          const dayButtons = document.querySelectorAll('button, [role="button"], abbr, td');
           for (const btn of dayButtons) {
             const text = (btn.innerText || btn.textContent || '').trim();
             if (text === String(day) || text.startsWith(String(day) + '\n')) {
@@ -187,7 +174,7 @@ async function scrapePrice(browser, dates) {
             }
           }
           return null;
-        }, checkOutDay);
+        }, { day: checkOutDay });
         
         if (checkoutClicked) {
           console.log(`    ✓ ${checkoutClicked}`);
