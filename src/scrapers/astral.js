@@ -12,7 +12,6 @@ const path = require('path');
 const HOTEL = {
   name: 'Queen of Sheba',
   url: 'https://www.astralhotels.co.il/hotels/astral-queen-of-sheba',
-  searchUrl: 'https://www.astralhotels.co.il/search',
   slug: 'queen-of-sheba',
   code: 'queen-of-sheba'
 };
@@ -21,7 +20,6 @@ const HOTEL = {
 const ADULTS = 2;
 const CHILDREN = 1;  // Child age 5
 const INFANTS = 1;   // Infant age 1
-const TOTAL_GUESTS = ADULTS + CHILDREN + INFANTS;
 
 // Date ranges to check (same as Isrotel)
 const DATE_RANGES = [
@@ -45,15 +43,7 @@ async function saveScreenshot(page, name) {
 }
 
 /**
- * Format date for display (DD/MM/YYYY)
- */
-function formatDateDisplay(dateStr) {
-  const [year, month, day] = dateStr.split('-');
-  return `${day}/${month}/${year}`;
-}
-
-/**
- * Scrape price for a date range using Astral's booking form
+ * Scrape price for a date range by automating the booking form
  */
 async function scrapePrice(browser, dates) {
   const context = await browser.newContext({
@@ -65,6 +55,31 @@ async function scrapePrice(browser, dates) {
   const page = await context.newPage();
   let price = null;
   
+  // Capture API responses
+  const apiPrices = [];
+  page.on('response', async (response) => {
+    const url = response.url();
+    // Look for API calls that might contain prices
+    if (url.includes('availability') || url.includes('search') || url.includes('rooms') || url.includes('rate')) {
+      try {
+        const contentType = response.headers()['content-type'] || '';
+        if (contentType.includes('json')) {
+          const data = await response.json();
+          const jsonStr = JSON.stringify(data);
+          // Extract prices from JSON
+          const priceMatches = jsonStr.match(/["\']?(?:price|total|amount|rate)["\']?\s*:\s*(\d+)/gi) || [];
+          for (const match of priceMatches) {
+            const num = parseInt(match.replace(/[^\d]/g, ''), 10);
+            if (num >= 5000 && num <= 50000) {
+              apiPrices.push(num);
+              console.log(`    API price found: ${num}`);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  });
+  
   try {
     console.log(`  📍 Checking ${HOTEL.name} for ${dates.label}...`);
     
@@ -72,109 +87,141 @@ async function scrapePrice(browser, dates) {
     await page.goto(HOTEL.url, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(2000);
     
-    // Try to interact with the booking form
-    // Look for date picker and guest selector
+    // Parse dates
+    const checkIn = new Date(dates.checkIn);
+    const checkOut = new Date(dates.checkOut);
+    
+    console.log(`    Selecting dates: ${dates.checkIn} to ${dates.checkOut}`);
+    
+    // Try to interact with booking form
     try {
-      // Click on date picker to open it
-      const dateButton = await page.$('button:has-text("לבחירת תאריכים"), [class*="date"], input[type="date"]');
+      // 1. Click on date picker button
+      const dateButton = await page.$('button:has-text("לבחירת תאריכים"), [data-testid="date-picker"], .date-picker-trigger');
       if (dateButton) {
         await dateButton.click();
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
+        console.log(`    Opened date picker`);
         
-        // Try to set check-in date
-        const checkInDate = new Date(dates.checkIn);
-        const checkOutDate = new Date(dates.checkOut);
+        // 2. Navigate to correct month (June 2026)
+        // The calendar might need navigation to the right month
+        const targetMonth = checkIn.getMonth(); // 5 for June (0-indexed)
+        const targetYear = checkIn.getFullYear(); // 2026
         
-        // Look for calendar navigation and date selection
-        // This is site-specific and may need adjustment
-        console.log(`    Setting dates: ${formatDateDisplay(dates.checkIn)} - ${formatDateDisplay(dates.checkOut)}`);
+        // Try to navigate months until we reach June 2026
+        for (let i = 0; i < 24; i++) { // Max 24 clicks (2 years)
+          const calendarText = await page.evaluate(() => {
+            const calendar = document.querySelector('[class*="calendar"], [class*="datepicker"], .react-datepicker');
+            return calendar ? calendar.innerText : '';
+          });
+          
+          if (calendarText.includes('יוני') && calendarText.includes('2026')) {
+            console.log(`    Found June 2026`);
+            break;
+          }
+          if (calendarText.includes('June') && calendarText.includes('2026')) {
+            console.log(`    Found June 2026`);
+            break;
+          }
+          
+          // Click next month button
+          const nextBtn = await page.$('[class*="next"], button:has-text(">"), button:has-text("›"), [aria-label*="next"]');
+          if (nextBtn) {
+            await nextBtn.click();
+            await page.waitForTimeout(300);
+          } else {
+            break;
+          }
+        }
+        
+        // 3. Select check-in day
+        const checkInDay = checkIn.getDate().toString();
+        const dayButtons = await page.$$(`button:has-text("${checkInDay}"), td:has-text("${checkInDay}"), [class*="day"]:has-text("${checkInDay}")`);
+        for (const btn of dayButtons) {
+          const text = await btn.textContent();
+          if (text?.trim() === checkInDay) {
+            await btn.click();
+            console.log(`    Selected check-in: day ${checkInDay}`);
+            await page.waitForTimeout(500);
+            break;
+          }
+        }
+        
+        // 4. Select check-out day  
+        const checkOutDay = checkOut.getDate().toString();
+        const checkOutButtons = await page.$$(`button:has-text("${checkOutDay}"), td:has-text("${checkOutDay}"), [class*="day"]:has-text("${checkOutDay}")`);
+        for (const btn of checkOutButtons) {
+          const text = await btn.textContent();
+          if (text?.trim() === checkOutDay) {
+            await btn.click();
+            console.log(`    Selected check-out: day ${checkOutDay}`);
+            await page.waitForTimeout(500);
+            break;
+          }
+        }
       }
       
-      // Look for guests/rooms selector
+      // 5. Set guests count
       const guestsButton = await page.$('button:has-text("אורחים"), [class*="guest"]');
       if (guestsButton) {
         await guestsButton.click();
         await page.waitForTimeout(1000);
-        console.log(`    Setting guests: ${TOTAL_GUESTS}`);
+        
+        // Try to increase adults and children
+        // This is very site-specific
+        console.log(`    Setting guests: ${ADULTS} adults + ${CHILDREN} children + ${INFANTS} infants`);
       }
       
-      // Click search button
-      const searchButton = await page.$('button:has-text("חיפוש"), button:has-text("קחו אותי לחופשה")');
+      // 6. Click search button
+      const searchButton = await page.$('button:has-text("קחו אותי לחופשה"), button:has-text("חיפוש"), button[type="submit"]');
       if (searchButton) {
         await searchButton.click();
+        console.log(`    Clicked search`);
         await page.waitForTimeout(5000);
       }
+      
     } catch (formError) {
-      console.log(`    Form interaction failed: ${formError.message}`);
+      console.log(`    Form interaction error: ${formError.message}`);
     }
     
-    // Wait for results and extract prices
     await page.waitForTimeout(3000);
     
     // Extract prices from the page
     const priceData = await page.evaluate(() => {
-      const results = [];
       const allText = document.body.innerText;
       
-      // Look for room cards/sections
-      const roomSections = document.querySelectorAll('[class*="room"], [class*="option"], [class*="card"], [class*="result"]');
+      // Find all price patterns
+      const priceRegex = /₪\s*([\d,]+)/g;
+      const allPrices = [];
+      let match;
       
-      for (const section of roomSections) {
-        const text = section.innerText || '';
-        
-        // Check if this is half-board (חצי פנסיון)
-        const isHalfBoard = text.includes('חצי פנסיון');
-        
-        // Extract prices
-        const priceMatches = text.match(/₪\s*[\d,]+/g) || [];
-        const prices = priceMatches.map(p => {
-          const num = parseInt(p.replace(/[^\d]/g, ''), 10);
-          // Filter for reasonable total stay prices
-          return (num >= 3000 && num <= 100000) ? num : null;
-        }).filter(Boolean);
-        
-        if (prices.length > 0) {
-          results.push({
-            isHalfBoard,
-            prices,
-            minPrice: Math.min(...prices)
-          });
+      while ((match = priceRegex.exec(allText)) !== null) {
+        const numStr = match[1].replace(/,/g, '');
+        const num = parseInt(numStr, 10);
+        if (num >= 5000 && num <= 50000) {
+          allPrices.push(num);
         }
       }
       
-      // Also find all prices on the page
-      const allPrices = (allText.match(/₪\s*[\d,]+/g) || [])
-        .map(p => parseInt(p.replace(/[^\d]/g, ''), 10))
-        .filter(p => p >= 3000 && p <= 100000);
-      
       return {
-        roomResults: results,
-        allPrices: [...new Set(allPrices)].sort((a, b) => a - b),
-        pageHasHalfBoard: allText.includes('חצי פנסיון'),
-        pageText: allText.substring(0, 5000)
+        prices: [...new Set(allPrices)].sort((a, b) => a - b),
+        debugText: allText.substring(0, 2000)
       };
     });
     
-    console.log(`    Found ${priceData.allPrices.length} valid prices on page`);
+    console.log(`    Page prices: ${priceData.prices.slice(0, 5).join(', ')}`);
+    console.log(`    API prices: ${apiPrices.slice(0, 5).join(', ')}`);
     
-    // Prefer half-board room prices
-    const halfBoardRooms = priceData.roomResults.filter(r => r.isHalfBoard);
-    if (halfBoardRooms.length > 0) {
-      price = Math.min(...halfBoardRooms.map(r => r.minPrice));
-      console.log(`    ✅ Found half-board price: ₪${price.toLocaleString()}`);
-    }
-    // Fall back to cheapest room
-    else if (priceData.allPrices.length > 0) {
-      price = priceData.allPrices[0];
-      console.log(`    ✅ Found price: ₪${price.toLocaleString()}`);
+    // Combine page and API prices
+    const allPrices = [...new Set([...priceData.prices, ...apiPrices])].sort((a, b) => a - b);
+    
+    if (allPrices.length > 0) {
+      price = allPrices[0];
+      console.log(`    ✅ Selected price: ₪${price.toLocaleString()}`);
+    } else {
+      console.log(`    ❌ No valid prices found`);
     }
     
     await saveScreenshot(page, `astral-${HOTEL.slug}-${dates.label.replace('/', '-')}`);
-    
-    if (!price) {
-      console.log(`    ❌ No valid price found`);
-      console.log(`    Debug - Sample text: ${priceData.pageText.substring(0, 300)}...`);
-    }
     
     return price;
     

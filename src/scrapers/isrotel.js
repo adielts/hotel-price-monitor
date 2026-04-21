@@ -92,76 +92,54 @@ async function scrapeHotelPrice(browser, hotel, dates) {
     console.log(`    URL: ${searchUrl}`);
     
     await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(5000); // Wait longer for dynamic content
     
-    // Wait for room results to load
-    await page.waitForSelector('.room-card, .search-result, [class*="room"], [class*="price"]', { timeout: 10000 }).catch(() => {});
-    
-    // Try to find half-board (חצי פנסיון) prices
-    // The page structure shows prices in different formats
+    // Extract prices from the page - simpler and more robust approach
     const priceData = await page.evaluate(() => {
-      const results = [];
+      const allText = document.body.innerText;
       
-      // Look for room cards/sections
-      const roomSections = document.querySelectorAll('[class*="room"], [class*="option"], .search-result-item, .hotel-room');
+      // Find all price patterns: ₪ followed by numbers with optional commas
+      // Handles formats like "₪ 9,321" or "₪9321" or "₪ 9,321 ש"ח"
+      const priceRegex = /₪\s*([\d,]+)/g;
+      const allPrices = [];
+      let match;
       
-      for (const section of roomSections) {
-        const text = section.innerText || '';
-        
-        // Check if this is half-board (חצי פנסיון)
-        const isHalfBoard = text.includes('חצי פנסיון');
-        
-        // Extract all prices from this section
-        const priceMatches = text.match(/₪\s*[\d,]+/g) || [];
-        const prices = priceMatches.map(p => {
-          const num = parseInt(p.replace(/[^\d]/g, ''), 10);
-          // Filter for reasonable total stay prices (4 nights for 4 people)
-          return (num >= 3000 && num <= 100000) ? num : null;
-        }).filter(Boolean);
-        
-        if (prices.length > 0) {
-          results.push({
-            isHalfBoard,
-            prices,
-            minPrice: Math.min(...prices)
-          });
+      while ((match = priceRegex.exec(allText)) !== null) {
+        const numStr = match[1].replace(/,/g, '');
+        const num = parseInt(numStr, 10);
+        // Valid total stay prices for 4 nights with family
+        if (num >= 5000 && num <= 50000) {
+          allPrices.push(num);
         }
       }
       
-      // Also try to find prices directly on the page
-      const allText = document.body.innerText;
-      const allPrices = (allText.match(/₪\s*[\d,]+/g) || [])
-        .map(p => parseInt(p.replace(/[^\d]/g, ''), 10))
-        .filter(p => p >= 3000 && p <= 100000);
+      // Also check for "חצי פנסיון" presence
+      const hasHalfBoard = allText.includes('חצי פנסיון');
+      
+      // Debug: get some page content
+      const debugText = allText.substring(0, 3000);
       
       return {
-        roomResults: results,
-        allPrices: [...new Set(allPrices)].sort((a, b) => a - b),
-        pageHasHalfBoard: allText.includes('חצי פנסיון'),
-        pageText: allText.substring(0, 5000) // For debugging
+        prices: [...new Set(allPrices)].sort((a, b) => a - b),
+        hasHalfBoard,
+        debugText
       };
     });
     
-    console.log(`    Found ${priceData.allPrices.length} valid prices on page`);
+    console.log(`    Found ${priceData.prices.length} valid prices`);
+    console.log(`    Prices: ${priceData.prices.slice(0, 10).join(', ')}`);
+    console.log(`    Has half-board: ${priceData.hasHalfBoard}`);
     
-    // Prefer half-board room prices
-    const halfBoardRooms = priceData.roomResults.filter(r => r.isHalfBoard);
-    if (halfBoardRooms.length > 0) {
-      price = Math.min(...halfBoardRooms.map(r => r.minPrice));
-      console.log(`    ✅ Found half-board price: ₪${price.toLocaleString()}`);
-    } 
-    // Fall back to cheapest room if half-board not specifically found
-    else if (priceData.allPrices.length > 0) {
-      price = priceData.allPrices[0]; // Cheapest valid price
-      console.log(`    ✅ Found price: ₪${price.toLocaleString()}`);
+    if (priceData.prices.length > 0) {
+      // Get the cheapest price
+      price = priceData.prices[0];
+      console.log(`    ✅ Selected price: ₪${price.toLocaleString()}`);
+    } else {
+      console.log(`    ❌ No valid prices found`);
+      console.log(`    Debug text sample: ${priceData.debugText.substring(0, 500)}...`);
     }
     
     await saveScreenshot(page, `isrotel-${hotel.slug}-${dates.label.replace('/', '-')}`);
-    
-    if (!price) {
-      console.log(`    ❌ No valid price found`);
-      console.log(`    Debug - Sample text: ${priceData.pageText.substring(0, 500)}...`);
-    }
     
     return price;
     
