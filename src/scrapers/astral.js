@@ -44,15 +44,19 @@ async function saveScreenshot(page, name) {
 
 /**
  * Scrape price for a date range by automating the booking form
+ * Has a 60 second timeout to prevent hanging
  */
 async function scrapePrice(browser, dates) {
-  const context = await browser.newContext({
-    locale: 'he-IL',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    viewport: { width: 1920, height: 1080 }
-  });
+  const TIMEOUT = 60000; // 60 seconds max per date range
   
-  const page = await context.newPage();
+  const scrapeWithTimeout = async () => {
+    const context = await browser.newContext({
+      locale: 'he-IL',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      viewport: { width: 1920, height: 1080 }
+    });
+    
+    const page = await context.newPage();
   let price = null;
   
   // Capture API responses
@@ -106,18 +110,23 @@ async function scrapePrice(browser, dates) {
         // We need to navigate from current month (April 2026) to June 2026 - about 2 months forward
         console.log(`    Navigating to June 2026...`);
         
-        for (let i = 0; i < 15; i++) { // Navigate up to 15 months forward
+        for (let i = 0; i < 5; i++) { // Navigate max 5 times, then give up
           // Check current calendar month
           const calendarText = await page.evaluate(() => {
             // Get all text from calendar area
             const calendarArea = document.querySelector('[class*="calendar"], [class*="Calendar"], [class*="datepicker"], [class*="DatePicker"], [role="dialog"]');
-            return calendarArea ? calendarArea.innerText : document.body.innerText.substring(0, 2000);
+            return calendarArea ? calendarArea.innerText : '';
           });
           
-          console.log(`    Calendar shows: ${calendarText.substring(0, 100)}...`);
+          if (!calendarText) {
+            console.log(`    Calendar not found, skipping date selection`);
+            break;
+          }
+          
+          console.log(`    Calendar month: ${calendarText.substring(0, 50)}...`);
           
           // Check if we found June 2026
-          const hasJune = calendarText.includes('יוני') || calendarText.includes('June') || calendarText.includes('06');
+          const hasJune = calendarText.includes('יוני') || calendarText.includes('June');
           const has2026 = calendarText.includes('2026');
           
           if (hasJune && has2026) {
@@ -125,38 +134,30 @@ async function scrapePrice(browser, dates) {
             break;
           }
           
-          // Try to click next month button - try multiple selectors
-          const nextSelectors = [
-            'button[aria-label*="next"]',
-            'button[aria-label*="Next"]', 
-            '[class*="next"]',
-            '[class*="Next"]',
-            'button:has-text(">")',
-            'button:has-text("›")',
-            'button:has-text("»")',
-            '[class*="arrow-right"]',
-            '[class*="chevron-right"]',
-            'svg[class*="right"]'
-          ];
-          
-          let clicked = false;
-          for (const selector of nextSelectors) {
-            try {
-              const nextBtn = await page.$(selector);
-              if (nextBtn) {
-                await nextBtn.click();
-                clicked = true;
-                console.log(`    Clicked next with: ${selector}`);
-                await page.waitForTimeout(400);
-                break;
+          // Try to click next month button
+          const clicked = await page.evaluate(() => {
+            const selectors = [
+              '[class*="next"]', '[class*="Next"]',
+              '[aria-label*="next"]', '[aria-label*="Next"]',
+              'button svg[class*="right"]',
+              '.react-datepicker__navigation--next'
+            ];
+            for (const sel of selectors) {
+              const btn = document.querySelector(sel);
+              if (btn) {
+                btn.click();
+                return sel;
               }
-            } catch (e) {}
-          }
+            }
+            return null;
+          });
           
-          if (!clicked) {
-            console.log(`    Could not find next button, trying keyboard`);
-            await page.keyboard.press('ArrowRight');
-            await page.waitForTimeout(300);
+          if (clicked) {
+            console.log(`    Clicked next: ${clicked}`);
+            await page.waitForTimeout(500);
+          } else {
+            console.log(`    No next button found, stopping navigation`);
+            break;
           }
         }
         
@@ -272,10 +273,26 @@ async function scrapePrice(browser, dates) {
     
   } catch (error) {
     console.error(`    ❌ Error: ${error.message}`);
-    await saveScreenshot(page, `astral-error-${HOTEL.slug}`);
+    try {
+      await saveScreenshot(page, `astral-error-${HOTEL.slug}`);
+    } catch (e) {}
     return null;
   } finally {
     await context.close();
+  }
+  };
+  
+  // Run with timeout
+  try {
+    return await Promise.race([
+      scrapeWithTimeout(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout after 60 seconds')), TIMEOUT)
+      )
+    ]);
+  } catch (error) {
+    console.log(`    ⏱️ Astral scrape timeout or error: ${error.message}`);
+    return null;
   }
 }
 
