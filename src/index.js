@@ -51,8 +51,9 @@ async function main() {
       Object.values(hotel).some(price => price !== null)
     );
     
+    // Don't fail - just note it in the message
     if (!hasAnyPrices) {
-      throw new Error('No prices were retrieved from any hotel');
+      console.log('⚠️ No prices were retrieved - will send diagnostic message');
     }
     
     // Compare with previous prices

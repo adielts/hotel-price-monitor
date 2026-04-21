@@ -12,12 +12,14 @@ const HOTELS = [
   {
     name: 'המלך שלמה',
     url: 'https://www.isrotel.co.il/isrotel-hotels/eilat-hotels/%D7%99%D7%A9%D7%A8%D7%95%D7%98%D7%9C-%D7%94%D7%9E%D7%9C%D7%9A-%D7%A9%D7%9C%D7%9E%D7%94/',
-    slug: 'king-solomon'
+    slug: 'king-solomon',
+    hotelCode: 'EILKS'
   },
   {
     name: 'רויאל גארדן',
     url: 'https://www.isrotel.co.il/isrotel-hotels/eilat-hotels/%D7%99%D7%A9%D7%A8%D7%95%D7%98%D7%9C-%D7%A8%D7%95%D7%99%D7%90%D7%9C-%D7%92%D7%90%D7%A8%D7%93%D7%9F/',
-    slug: 'royal-garden'
+    slug: 'royal-garden',
+    hotelCode: 'EILRG'
   }
 ];
 
@@ -43,22 +45,23 @@ async function saveScreenshot(page, name) {
 }
 
 /**
- * Random delay to avoid detection
+ * Extract all prices from text
  */
-async function randomDelay(min = 1000, max = 3000) {
-  const delay = min + Math.random() * (max - min);
-  await new Promise(r => setTimeout(r, delay));
+function extractPrices(text) {
+  if (!text) return [];
+  const matches = text.match(/₪\s*[\d,]+/g) || [];
+  return matches.map(m => {
+    const num = parseInt(m.replace(/[^\d]/g, ''), 10);
+    return num > 100 && num < 50000 ? num : null;
+  }).filter(Boolean);
 }
 
 /**
- * Extract price from text (handles various formats)
+ * Format date for URL (DD/MM/YYYY)
  */
-function extractPrice(text) {
-  if (!text) return null;
-  // Remove non-numeric characters except digits
-  const numbers = text.replace(/[^\d]/g, '');
-  const price = parseInt(numbers, 10);
-  return price > 0 ? price : null;
+function formatDateForUrl(dateStr) {
+  const [year, month, day] = dateStr.split('-');
+  return `${day}/${month}/${year}`;
 }
 
 /**
@@ -71,129 +74,95 @@ function extractPrice(text) {
 async function scrapeHotelPrice(browser, hotel, dates) {
   const context = await browser.newContext({
     locale: 'he-IL',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 }
   });
   
   const page = await context.newPage();
+  let price = null;
+  
+  // Monitor API responses
+  const apiPrices = [];
+  page.on('response', async (response) => {
+    const url = response.url();
+    if (url.includes('price') || url.includes('rate') || url.includes('availability')) {
+      try {
+        if (response.headers()['content-type']?.includes('json')) {
+          const data = await response.json();
+          const prices = extractPrices(JSON.stringify(data));
+          apiPrices.push(...prices);
+        }
+      } catch (e) {}
+    }
+  });
   
   try {
     console.log(`  📍 Checking ${hotel.name} for ${dates.label}...`);
     
-    // Navigate to hotel page
-    await page.goto(hotel.url, { 
-      waitUntil: 'domcontentloaded',
-      timeout: 30000 
-    });
+    // Format dates
+    const checkIn = formatDateForUrl(dates.checkIn);
+    const checkOut = formatDateForUrl(dates.checkOut);
     
-    await randomDelay(2000, 4000);
-    
-    // Try to find and click the booking button
-    // Common selectors for Isrotel booking buttons
-    const bookingSelectors = [
-      'button:has-text("הזמנה")',
-      'a:has-text("הזמנה")',
-      '.booking-btn',
-      '.reserve-btn',
-      '[data-action="book"]',
-      '.btn-booking',
-      'button:has-text("בדוק זמינות")',
-      'a:has-text("בדוק זמינות")'
+    // Try direct booking URLs
+    const bookingUrls = [
+      `https://www.isrotel.co.il/booking-results/?checkin=${checkIn}&checkout=${checkOut}&adults=2&children=0`,
+      hotel.url
     ];
     
-    let bookingButton = null;
-    for (const selector of bookingSelectors) {
+    for (const url of bookingUrls) {
+      if (price) break;
+      
       try {
-        bookingButton = await page.$(selector);
-        if (bookingButton) {
-          console.log(`    Found booking button with selector: ${selector}`);
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
+        await page.waitForTimeout(2000);
+        
+        // Get all text and find prices
+        const pageText = await page.evaluate(() => document.body.innerText);
+        const foundPrices = extractPrices(pageText);
+        
+        if (foundPrices.length > 0) {
+          price = Math.min(...foundPrices);
+          console.log(`    ✅ Found prices: ${foundPrices.slice(0, 5).join(', ')}... Using: ₪${price}`);
           break;
         }
+        
+        // Check API prices
+        if (apiPrices.length > 0) {
+          price = Math.min(...apiPrices);
+          console.log(`    ✅ Found API price: ₪${price}`);
+          break;
+        }
+        
       } catch (e) {
-        // Continue trying other selectors
+        console.log(`    ⚠️ URL timeout`);
       }
     }
     
-    if (bookingButton) {
-      await bookingButton.click();
-      await randomDelay(2000, 3000);
-    }
-    
-    // Wait for booking form/popup to appear
-    await page.waitForTimeout(3000);
-    
-    // Try to find date inputs and fill them
-    // This is highly dependent on the actual site structure
-    const dateInputSelectors = [
-      'input[type="date"]',
-      'input[name*="checkin"]',
-      'input[name*="check-in"]',
-      'input[placeholder*="כניסה"]',
-      '.date-picker input',
-      '[data-field="checkin"]'
-    ];
-    
-    // Try direct URL approach with dates
-    const bookingUrl = `https://www.isrotel.co.il/booking/?hotel=${hotel.slug}&checkin=${dates.checkIn}&checkout=${dates.checkOut}&adults=2`;
-    
-    try {
-      await page.goto(bookingUrl, { 
-        waitUntil: 'networkidle',
-        timeout: 30000 
-      });
-      await randomDelay(3000, 5000);
-    } catch (e) {
-      console.log(`    Could not load booking URL directly`);
-    }
-    
-    // Look for price elements
-    const priceSelectors = [
-      '.price',
-      '.room-price',
-      '.total-price',
-      '.rate',
-      '[class*="price"]',
-      '[data-price]',
-      'span:has-text("₪")',
-      '.amount'
-    ];
-    
-    let price = null;
-    
-    for (const selector of priceSelectors) {
+    // Try clicking booking button as fallback
+    if (!price) {
       try {
-        const elements = await page.$$(selector);
-        for (const element of elements) {
-          const text = await element.textContent();
-          if (text && text.includes('₪')) {
-            price = extractPrice(text);
-            if (price && price > 100) { // Sanity check
-              console.log(`    Found price: ₪${price}`);
-              break;
-            }
+        await page.goto(hotel.url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        const btn = await page.$('a:has-text("הזמנה")');
+        if (btn) {
+          await btn.click();
+          await page.waitForTimeout(3000);
+          const pageText = await page.evaluate(() => document.body.innerText);
+          const foundPrices = extractPrices(pageText);
+          if (foundPrices.length > 0) {
+            price = Math.min(...foundPrices);
+            console.log(`    ✅ Found price after click: ₪${price}`);
           }
         }
-        if (price) break;
-      } catch (e) {
-        // Continue trying other selectors
-      }
+      } catch (e) {}
     }
     
-    // If no price found, try to extract from page content
-    if (!price) {
-      const pageContent = await page.content();
-      const priceMatch = pageContent.match(/₪\s*([\d,]+)/);
-      if (priceMatch) {
-        price = extractPrice(priceMatch[0]);
-      }
-    }
-    
-    // Save screenshot for debugging
     await saveScreenshot(page, `isrotel-${hotel.slug}-${dates.label.replace('/', '-')}`);
     
+    if (!price) console.log(`    ❌ No price found`);
     return price;
     
   } catch (error) {
-    console.error(`    ❌ Error scraping ${hotel.name}: ${error.message}`);
+    console.error(`    ❌ Error: ${error.message}`);
     await saveScreenshot(page, `isrotel-error-${hotel.slug}`);
     return null;
   } finally {
@@ -229,8 +198,8 @@ async function scrapeIsrotel() {
         const price = await scrapeHotelPrice(browser, hotel, dates);
         results[hotel.name][dates.label] = price;
         
-        // Delay between requests to avoid rate limiting
-        await randomDelay(3000, 5000);
+        // Short delay between requests
+        await new Promise(r => setTimeout(r, 1000));
       }
     }
   } finally {
