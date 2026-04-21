@@ -1,0 +1,31 @@
+{
+  "name": "hotel-price-monitor",
+  "version": "1.0.0",
+  "description": "Automated hotel price monitoring with Telegram notifications",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node src/test.js",
+    "debug": "cross-env HEADLESS=false node src/index.js"
+  },
+  "keywords": [
+    "hotel",
+    "price",
+    "monitor",
+    "telegram",
+    "playwright",
+    "scraper"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.42.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
