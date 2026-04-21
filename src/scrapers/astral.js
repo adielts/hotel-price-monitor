@@ -161,6 +161,3 @@ async function scrapeAstral() {
 }
 
 module.exports = { scrapeAstral, HOTEL, DATE_RANGES };
-}
-
-module.exports = { scrapeAstral, HOTEL, DATE_RANGES };
