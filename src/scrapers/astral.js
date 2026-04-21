@@ -106,118 +106,114 @@ async function scrapePrice(browser, dates) {
         await page.waitForTimeout(1500);
         console.log(`    Opened date picker`);
         
-        // 2. Navigate to correct month (June 2026)
-        // We need to navigate from current month (April 2026) to June 2026 - about 2 months forward
-        console.log(`    Navigating to June 2026...`);
+        // 2. The calendar is an infinite scroll - all months are already loaded
+        // Just need to find and click the right dates in June 2026
+        console.log(`    Looking for dates in calendar...`);
         
-        for (let i = 0; i < 5; i++) { // Navigate max 5 times, then give up
-          // Check current calendar month
-          const calendarText = await page.evaluate(() => {
-            // Get all text from calendar area
-            const calendarArea = document.querySelector('[class*="calendar"], [class*="Calendar"], [class*="datepicker"], [class*="DatePicker"], [role="dialog"]');
-            return calendarArea ? calendarArea.innerText : '';
-          });
-          
-          if (!calendarText) {
-            console.log(`    Calendar not found, skipping date selection`);
-            break;
-          }
-          
-          console.log(`    Calendar month: ${calendarText.substring(0, 50)}...`);
-          
-          // Check if we found June 2026
-          const hasJune = calendarText.includes('יוני') || calendarText.includes('June');
-          const has2026 = calendarText.includes('2026');
-          
-          if (hasJune && has2026) {
-            console.log(`    ✓ Found June 2026`);
-            break;
-          }
-          
-          // Try to click next month button
-          const clicked = await page.evaluate(() => {
-            const selectors = [
-              '[class*="next"]', '[class*="Next"]',
-              '[aria-label*="next"]', '[aria-label*="Next"]',
-              'button svg[class*="right"]',
-              '.react-datepicker__navigation--next'
-            ];
-            for (const sel of selectors) {
-              const btn = document.querySelector(sel);
-              if (btn) {
-                btn.click();
-                return sel;
-              }
-            }
-            return null;
-          });
-          
-          if (clicked) {
-            console.log(`    Clicked next: ${clicked}`);
-            await page.waitForTimeout(500);
-          } else {
-            console.log(`    No next button found, stopping navigation`);
-            break;
-          }
-        }
-        
-        // 3. Select check-in day (7)
-        const checkInDay = checkIn.getDate().toString();
-        console.log(`    Looking for day ${checkInDay}...`);
-        
-        // Find clickable day elements
-        const dayClicked = await page.evaluate((day) => {
-          // Find all elements that might be day buttons
-          const allElements = document.querySelectorAll('button, td, div[role="button"], span[role="button"], [class*="day"], [class*="Day"]');
+        // Scroll the calendar to show June if needed
+        await page.evaluate(() => {
+          // Find June 2026 in the calendar by looking for the text
+          const allElements = document.querySelectorAll('*');
           for (const el of allElements) {
-            const text = (el.innerText || el.textContent || '').trim();
-            if (text === day && !el.classList.toString().includes('disabled')) {
-              el.click();
+            if ((el.innerText || '').includes('יוני 2026') || (el.innerText || '').includes('June 2026')) {
+              el.scrollIntoView({ behavior: 'instant', block: 'center' });
               return true;
             }
           }
           return false;
-        }, checkInDay);
+        });
         
-        if (dayClicked) {
-          console.log(`    ✓ Selected check-in: day ${checkInDay}`);
-          await page.waitForTimeout(500);
+        await page.waitForTimeout(500);
+        
+        // 3. Select check-in day (7) - look for day 7 in June section
+        const checkInDay = checkIn.getDate(); // 7
+        console.log(`    Looking for day ${checkInDay} in June...`);
+        
+        // Click on the check-in date
+        const checkInClicked = await page.evaluate((day, month) => {
+          // Find the June 2026 section first
+          const monthLabels = document.querySelectorAll('*');
+          let juneSection = null;
+          
+          for (const el of monthLabels) {
+            const text = el.innerText || '';
+            if ((text.includes('יוני 2026') || text.includes('June 2026')) && text.length < 20) {
+              // Found the month label, now find the calendar grid near it
+              juneSection = el.closest('[class*="month"]') || el.parentElement?.parentElement;
+              break;
+            }
+          }
+          
+          // Now find day buttons - they contain just the number
+          const dayButtons = document.querySelectorAll('button, [role="button"], abbr');
+          for (const btn of dayButtons) {
+            const text = (btn.innerText || btn.textContent || '').trim();
+            // Match exact day number
+            if (text === String(day) || text.startsWith(String(day) + '\n')) {
+              // Check this isn't disabled
+              const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
+                                 btn.classList.toString().includes('disabled');
+              if (!isDisabled) {
+                btn.click();
+                return `Clicked day ${day}`;
+              }
+            }
+          }
+          return null;
+        }, checkInDay, 6); // 6 = June (0-indexed)
+        
+        if (checkInClicked) {
+          console.log(`    ✓ ${checkInClicked}`);
+          await page.waitForTimeout(700);
+        } else {
+          console.log(`    Could not click check-in day`);
         }
         
         // 4. Select check-out day (11)
-        const checkOutDay = checkOut.getDate().toString();
+        const checkOutDay = checkOut.getDate(); // 11
         console.log(`    Looking for checkout day ${checkOutDay}...`);
         
         const checkoutClicked = await page.evaluate((day) => {
-          const allElements = document.querySelectorAll('button, td, div[role="button"], span[role="button"], [class*="day"], [class*="Day"]');
-          for (const el of allElements) {
-            const text = (el.innerText || el.textContent || '').trim();
-            if (text === day && !el.classList.toString().includes('disabled')) {
-              el.click();
-              return true;
+          const dayButtons = document.querySelectorAll('button, [role="button"], abbr');
+          for (const btn of dayButtons) {
+            const text = (btn.innerText || btn.textContent || '').trim();
+            if (text === String(day) || text.startsWith(String(day) + '\n')) {
+              const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
+                                 btn.classList.toString().includes('disabled');
+              if (!isDisabled) {
+                btn.click();
+                return `Clicked day ${day}`;
+              }
             }
           }
-          return false;
+          return null;
         }, checkOutDay);
         
         if (checkoutClicked) {
-          console.log(`    ✓ Selected check-out: day ${checkOutDay}`);
-          await page.waitForTimeout(500);
+          console.log(`    ✓ ${checkoutClicked}`);
+          await page.waitForTimeout(700);
+        } else {
+          console.log(`    Could not click check-out day`);
         }
       }
       
-      // 5. Set guests count
+      // 5. Click "המשך" (Continue) button if present
+      const continueBtn = await page.$('button:has-text("המשך")');
+      if (continueBtn) {
+        await continueBtn.click();
+        console.log(`    Clicked continue`);
+        await page.waitForTimeout(1000);
+      }
+      
+      // 6. Set guests count
       const guestsButton = await page.$('button:has-text("אורחים"), [class*="guest"]');
       if (guestsButton) {
         await guestsButton.click();
         await page.waitForTimeout(1000);
-        
-        // Try to increase adults and children
-        // This is very site-specific
         console.log(`    Setting guests: ${ADULTS} adults + ${CHILDREN} children + ${INFANTS} infants`);
       }
       
-      // 6. Click search button
+      // 7. Click search button
       const searchButton = await page.$('button:has-text("קחו אותי לחופשה"), button:has-text("חיפוש"), button[type="submit"]');
       if (searchButton) {
         await searchButton.click();
