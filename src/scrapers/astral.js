@@ -87,9 +87,9 @@ async function scrapePrice(browser, dates) {
   try {
     console.log(`  📍 Checking ${HOTEL.name} for ${dates.label}...`);
     
-    // Navigate to hotel page
-    await page.goto(HOTEL.url, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.waitForTimeout(2000);
+    // Navigate to hotel page - use domcontentloaded for faster load
+    await page.goto(HOTEL.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForTimeout(3000); // Wait for dynamic content
     
     // Parse dates
     const checkIn = new Date(dates.checkIn);
@@ -106,46 +106,114 @@ async function scrapePrice(browser, dates) {
         await page.waitForTimeout(1500);
         console.log(`    Opened date picker`);
         
-        // 2. The calendar is an infinite scroll - all months are already loaded
-        // Just need to find and click the right dates in June 2026
-        console.log(`    Looking for dates in calendar...`);
+        // 2. The calendar is an infinite scroll - need to scroll to June 2026
+        console.log(`    Scrolling calendar to June 2026...`);
         
-        // Scroll the calendar to show June if needed
-        await page.evaluate(() => {
-          // Find June 2026 in the calendar by looking for the text
-          const allElements = document.querySelectorAll('*');
-          for (const el of allElements) {
-            if ((el.innerText || '').includes('יוני 2026') || (el.innerText || '').includes('June 2026')) {
-              el.scrollIntoView({ behavior: 'instant', block: 'center' });
-              return true;
+        // Scroll the calendar container to show June
+        const scrolledToJune = await page.evaluate(() => {
+          // Find calendar container
+          const calendarContainers = document.querySelectorAll('[class*="calendar"], [class*="Calendar"], [class*="scroll"]');
+          
+          for (const container of calendarContainers) {
+            // Check if this container has month labels
+            const text = container.innerText || '';
+            if (text.includes('אפריל') || text.includes('April') || text.includes('מאי')) {
+              // Found calendar, now find June section
+              const allElements = container.querySelectorAll('*');
+              for (const el of allElements) {
+                const elText = el.innerText || '';
+                if ((elText.includes('יוני 2026') || elText.includes('יוני') && elText.length < 30)) {
+                  el.scrollIntoView({ behavior: 'instant', block: 'center' });
+                  return 'Scrolled to June';
+                }
+              }
+              
+              // If can't find June label, try scrolling the container down
+              container.scrollTop += 400;
+              return 'Scrolled container down';
             }
           }
-          return false;
+          
+          // Alternative: find any element mentioning June and scroll to it
+          const allPageElements = document.querySelectorAll('*');
+          for (const el of allPageElements) {
+            const text = (el.innerText || '').trim();
+            if (text === 'יוני 2026' || text === 'June 2026' || 
+                (text.includes('יוני') && text.includes('2026') && text.length < 30)) {
+              el.scrollIntoView({ behavior: 'instant', block: 'center' });
+              return 'Scrolled to June element';
+            }
+          }
+          
+          return null;
         });
         
-        await page.waitForTimeout(500);
+        if (scrolledToJune) {
+          console.log(`    ✓ ${scrolledToJune}`);
+        }
+        await page.waitForTimeout(800);
         
         // 3. Select check-in day (7) - look for day 7 in June section
         const checkInDay = checkIn.getDate(); // 7
         console.log(`    Looking for day ${checkInDay} in June...`);
         
-        // Click on the check-in date
+        // Click on the check-in date - need to find it in June section
         const checkInClicked = await page.evaluate(({ day }) => {
-          // Find day buttons - they contain just the number
-          const dayButtons = document.querySelectorAll('button, [role="button"], abbr, td');
-          for (const btn of dayButtons) {
-            const text = (btn.innerText || btn.textContent || '').trim();
-            // Match exact day number (could be "7" or "7\nholiday text")
-            if (text === String(day) || text.startsWith(String(day) + '\n')) {
-              // Check this isn't disabled
-              const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
-                                 btn.classList.toString().includes('disabled');
-              if (!isDisabled) {
-                btn.click();
-                return `Clicked day ${day}`;
+          // Strategy: Find the June 2026 label, then look for nearby day buttons
+          let juneSection = null;
+          const allElements = document.querySelectorAll('*');
+          
+          // Find June section
+          for (const el of allElements) {
+            const text = (el.innerText || '').trim();
+            if ((text === 'יוני 2026' || text === 'June 2026' || text.includes('יוני')) && text.length < 30) {
+              // Found June label - its parent should be the month container
+              juneSection = el.parentElement?.parentElement || el.parentElement;
+              break;
+            }
+          }
+          
+          // If found June section, look for day buttons within it
+          if (juneSection) {
+            const dayButtons = juneSection.querySelectorAll('button, [role="button"], abbr, td, span');
+            for (const btn of dayButtons) {
+              const text = (btn.innerText || btn.textContent || '').trim();
+              if (text === String(day)) {
+                const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true';
+                if (!isDisabled) {
+                  btn.click();
+                  return `Clicked day ${day} in June section`;
+                }
               }
             }
           }
+          
+          // Fallback: search through all day buttons and count occurrences
+          // We want the 3rd occurrence of the day number (April, May, June)
+          const allDayButtons = document.querySelectorAll('button, [role="button"], abbr, td');
+          const matches = [];
+          for (const btn of allDayButtons) {
+            const text = (btn.innerText || btn.textContent || '').trim();
+            if (text === String(day) || text.startsWith(String(day) + '\n')) {
+              const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
+                                 btn.classList.toString().includes('disabled');
+              if (!isDisabled) {
+                matches.push(btn);
+              }
+            }
+          }
+          
+          // Click the 3rd match (index 2) which should be June
+          // (April=0, May=1, June=2)
+          if (matches.length >= 3) {
+            matches[2].click();
+            return `Clicked 3rd occurrence of day ${day} (June)`;
+          } else if (matches.length > 0) {
+            // If less than 3, click the last one
+            matches[matches.length - 1].click();
+            return `Clicked last occurrence of day ${day}`;
+          }
+          
           return null;
         }, { day: checkInDay });
         
@@ -156,23 +224,59 @@ async function scrapePrice(browser, dates) {
           console.log(`    Could not click check-in day`);
         }
         
-        // 4. Select check-out day (11)
+        // 4. Select check-out day (11) in June
         const checkOutDay = checkOut.getDate(); // 11
-        console.log(`    Looking for checkout day ${checkOutDay}...`);
+        console.log(`    Looking for checkout day ${checkOutDay} in June...`);
         
         const checkoutClicked = await page.evaluate(({ day }) => {
-          const dayButtons = document.querySelectorAll('button, [role="button"], abbr, td');
-          for (const btn of dayButtons) {
+          // Same strategy - find June section or use 3rd occurrence
+          let juneSection = null;
+          const allElements = document.querySelectorAll('*');
+          
+          for (const el of allElements) {
+            const text = (el.innerText || '').trim();
+            if ((text === 'יוני 2026' || text === 'June 2026' || text.includes('יוני')) && text.length < 30) {
+              juneSection = el.parentElement?.parentElement || el.parentElement;
+              break;
+            }
+          }
+          
+          if (juneSection) {
+            const dayButtons = juneSection.querySelectorAll('button, [role="button"], abbr, td, span');
+            for (const btn of dayButtons) {
+              const text = (btn.innerText || btn.textContent || '').trim();
+              if (text === String(day)) {
+                const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true';
+                if (!isDisabled) {
+                  btn.click();
+                  return `Clicked day ${day} in June section`;
+                }
+              }
+            }
+          }
+          
+          // Fallback: 3rd occurrence
+          const allDayButtons = document.querySelectorAll('button, [role="button"], abbr, td');
+          const matches = [];
+          for (const btn of allDayButtons) {
             const text = (btn.innerText || btn.textContent || '').trim();
             if (text === String(day) || text.startsWith(String(day) + '\n')) {
               const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
                                  btn.classList.toString().includes('disabled');
               if (!isDisabled) {
-                btn.click();
-                return `Clicked day ${day}`;
+                matches.push(btn);
               }
             }
           }
+          
+          if (matches.length >= 3) {
+            matches[2].click();
+            return `Clicked 3rd occurrence of day ${day} (June)`;
+          } else if (matches.length > 0) {
+            matches[matches.length - 1].click();
+            return `Clicked last occurrence of day ${day}`;
+          }
+          
           return null;
         }, { day: checkOutDay });
         
