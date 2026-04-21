@@ -103,60 +103,105 @@ async function scrapePrice(browser, dates) {
         console.log(`    Opened date picker`);
         
         // 2. Navigate to correct month (June 2026)
-        // The calendar might need navigation to the right month
-        const targetMonth = checkIn.getMonth(); // 5 for June (0-indexed)
-        const targetYear = checkIn.getFullYear(); // 2026
+        // We need to navigate from current month (April 2026) to June 2026 - about 2 months forward
+        console.log(`    Navigating to June 2026...`);
         
-        // Try to navigate months until we reach June 2026
-        for (let i = 0; i < 24; i++) { // Max 24 clicks (2 years)
+        for (let i = 0; i < 15; i++) { // Navigate up to 15 months forward
+          // Check current calendar month
           const calendarText = await page.evaluate(() => {
-            const calendar = document.querySelector('[class*="calendar"], [class*="datepicker"], .react-datepicker');
-            return calendar ? calendar.innerText : '';
+            // Get all text from calendar area
+            const calendarArea = document.querySelector('[class*="calendar"], [class*="Calendar"], [class*="datepicker"], [class*="DatePicker"], [role="dialog"]');
+            return calendarArea ? calendarArea.innerText : document.body.innerText.substring(0, 2000);
           });
           
-          if (calendarText.includes('יוני') && calendarText.includes('2026')) {
-            console.log(`    Found June 2026`);
-            break;
-          }
-          if (calendarText.includes('June') && calendarText.includes('2026')) {
-            console.log(`    Found June 2026`);
+          console.log(`    Calendar shows: ${calendarText.substring(0, 100)}...`);
+          
+          // Check if we found June 2026
+          const hasJune = calendarText.includes('יוני') || calendarText.includes('June') || calendarText.includes('06');
+          const has2026 = calendarText.includes('2026');
+          
+          if (hasJune && has2026) {
+            console.log(`    ✓ Found June 2026`);
             break;
           }
           
-          // Click next month button
-          const nextBtn = await page.$('[class*="next"], button:has-text(">"), button:has-text("›"), [aria-label*="next"]');
-          if (nextBtn) {
-            await nextBtn.click();
+          // Try to click next month button - try multiple selectors
+          const nextSelectors = [
+            'button[aria-label*="next"]',
+            'button[aria-label*="Next"]', 
+            '[class*="next"]',
+            '[class*="Next"]',
+            'button:has-text(">")',
+            'button:has-text("›")',
+            'button:has-text("»")',
+            '[class*="arrow-right"]',
+            '[class*="chevron-right"]',
+            'svg[class*="right"]'
+          ];
+          
+          let clicked = false;
+          for (const selector of nextSelectors) {
+            try {
+              const nextBtn = await page.$(selector);
+              if (nextBtn) {
+                await nextBtn.click();
+                clicked = true;
+                console.log(`    Clicked next with: ${selector}`);
+                await page.waitForTimeout(400);
+                break;
+              }
+            } catch (e) {}
+          }
+          
+          if (!clicked) {
+            console.log(`    Could not find next button, trying keyboard`);
+            await page.keyboard.press('ArrowRight');
             await page.waitForTimeout(300);
-          } else {
-            break;
           }
         }
         
-        // 3. Select check-in day
+        // 3. Select check-in day (7)
         const checkInDay = checkIn.getDate().toString();
-        const dayButtons = await page.$$(`button:has-text("${checkInDay}"), td:has-text("${checkInDay}"), [class*="day"]:has-text("${checkInDay}")`);
-        for (const btn of dayButtons) {
-          const text = await btn.textContent();
-          if (text?.trim() === checkInDay) {
-            await btn.click();
-            console.log(`    Selected check-in: day ${checkInDay}`);
-            await page.waitForTimeout(500);
-            break;
+        console.log(`    Looking for day ${checkInDay}...`);
+        
+        // Find clickable day elements
+        const dayClicked = await page.evaluate((day) => {
+          // Find all elements that might be day buttons
+          const allElements = document.querySelectorAll('button, td, div[role="button"], span[role="button"], [class*="day"], [class*="Day"]');
+          for (const el of allElements) {
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text === day && !el.classList.toString().includes('disabled')) {
+              el.click();
+              return true;
+            }
           }
+          return false;
+        }, checkInDay);
+        
+        if (dayClicked) {
+          console.log(`    ✓ Selected check-in: day ${checkInDay}`);
+          await page.waitForTimeout(500);
         }
         
-        // 4. Select check-out day  
+        // 4. Select check-out day (11)
         const checkOutDay = checkOut.getDate().toString();
-        const checkOutButtons = await page.$$(`button:has-text("${checkOutDay}"), td:has-text("${checkOutDay}"), [class*="day"]:has-text("${checkOutDay}")`);
-        for (const btn of checkOutButtons) {
-          const text = await btn.textContent();
-          if (text?.trim() === checkOutDay) {
-            await btn.click();
-            console.log(`    Selected check-out: day ${checkOutDay}`);
-            await page.waitForTimeout(500);
-            break;
+        console.log(`    Looking for checkout day ${checkOutDay}...`);
+        
+        const checkoutClicked = await page.evaluate((day) => {
+          const allElements = document.querySelectorAll('button, td, div[role="button"], span[role="button"], [class*="day"], [class*="Day"]');
+          for (const el of allElements) {
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text === day && !el.classList.toString().includes('disabled')) {
+              el.click();
+              return true;
+            }
           }
+          return false;
+        }, checkOutDay);
+        
+        if (checkoutClicked) {
+          console.log(`    ✓ Selected check-out: day ${checkOutDay}`);
+          await page.waitForTimeout(500);
         }
       }
       

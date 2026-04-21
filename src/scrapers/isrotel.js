@@ -94,41 +94,77 @@ async function scrapeHotelPrice(browser, hotel, dates) {
     await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(5000); // Wait longer for dynamic content
     
-    // Extract prices from the page - simpler and more robust approach
+    // Extract prices from the page - try multiple methods
     const priceData = await page.evaluate(() => {
       const allText = document.body.innerText;
       
-      // Find all price patterns: ₪ followed by numbers with optional commas
-      // Handles formats like "₪ 9,321" or "₪9321" or "₪ 9,321 ש"ח"
-      const priceRegex = /₪\s*([\d,]+)/g;
-      const allPrices = [];
+      // Method 1: Find ₪ followed by numbers
+      const prices1 = [];
+      const regex1 = /₪\s*([\d,]+)/g;
       let match;
-      
-      while ((match = priceRegex.exec(allText)) !== null) {
-        const numStr = match[1].replace(/,/g, '');
-        const num = parseInt(numStr, 10);
-        // Valid total stay prices for 4 nights with family
+      while ((match = regex1.exec(allText)) !== null) {
+        const num = parseInt(match[1].replace(/,/g, ''), 10);
         if (num >= 5000 && num <= 50000) {
-          allPrices.push(num);
+          prices1.push(num);
         }
       }
       
-      // Also check for "חצי פנסיון" presence
-      const hasHalfBoard = allText.includes('חצי פנסיון');
+      // Method 2: Find numbers followed by ₪ or ש"ח
+      const regex2 = /([\d,]+)\s*(?:₪|ש"ח)/g;
+      while ((match = regex2.exec(allText)) !== null) {
+        const num = parseInt(match[1].replace(/,/g, ''), 10);
+        if (num >= 5000 && num <= 50000) {
+          prices1.push(num);
+        }
+      }
       
-      // Debug: get some page content
-      const debugText = allText.substring(0, 3000);
+      // Method 3: Look for price elements in DOM
+      const priceElements = document.querySelectorAll('[class*="price"], [class*="Price"], [class*="cost"], [class*="total"], [class*="sum"]');
+      for (const el of priceElements) {
+        const text = el.innerText || el.textContent || '';
+        const nums = text.match(/[\d,]+/g) || [];
+        for (const numStr of nums) {
+          const num = parseInt(numStr.replace(/,/g, ''), 10);
+          if (num >= 5000 && num <= 50000) {
+            prices1.push(num);
+          }
+        }
+      }
+      
+      // Get sample of page text for debugging
+      const sampleText = allText.substring(0, 4000);
+      
+      // Look for specific price patterns visible in screenshots
+      const specificPrices = [];
+      const patterns = [
+        /(\d{1,2}[,.]?\d{3})\s*₪/g,  // 9,321 ₪
+        /₪\s*(\d{1,2}[,.]?\d{3})/g,  // ₪ 9,321
+      ];
+      
+      for (const pattern of patterns) {
+        let m;
+        while ((m = pattern.exec(allText)) !== null) {
+          const num = parseInt(m[1].replace(/[,\.]/g, ''), 10);
+          if (num >= 5000 && num <= 50000) {
+            specificPrices.push(num);
+          }
+        }
+      }
       
       return {
-        prices: [...new Set(allPrices)].sort((a, b) => a - b),
-        hasHalfBoard,
-        debugText
+        prices: [...new Set([...prices1, ...specificPrices])].sort((a, b) => a - b),
+        sampleText,
+        priceElementCount: priceElements.length,
+        foundAnyPriceSymbol: allText.includes('₪'),
+        foundNumbers: (allText.match(/\d{4,5}/g) || []).slice(0, 20)
       };
     });
     
     console.log(`    Found ${priceData.prices.length} valid prices`);
     console.log(`    Prices: ${priceData.prices.slice(0, 10).join(', ')}`);
-    console.log(`    Has half-board: ${priceData.hasHalfBoard}`);
+    console.log(`    Price elements in DOM: ${priceData.priceElementCount}`);
+    console.log(`    Found ₪ symbol: ${priceData.foundAnyPriceSymbol}`);
+    console.log(`    Numbers found: ${priceData.foundNumbers.join(', ')}`);
     
     if (priceData.prices.length > 0) {
       // Get the cheapest price
@@ -136,7 +172,9 @@ async function scrapeHotelPrice(browser, hotel, dates) {
       console.log(`    ✅ Selected price: ₪${price.toLocaleString()}`);
     } else {
       console.log(`    ❌ No valid prices found`);
-      console.log(`    Debug text sample: ${priceData.debugText.substring(0, 500)}...`);
+      // Log more debug info
+      console.log(`    Sample text (first 1000 chars):`);
+      console.log(priceData.sampleText.substring(0, 1000));
     }
     
     await saveScreenshot(page, `isrotel-${hotel.slug}-${dates.label.replace('/', '-')}`);
