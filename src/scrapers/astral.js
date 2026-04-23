@@ -264,21 +264,41 @@ async function scrapeAstral() {
     ]
   });
   
-  // First, visit homepage to establish cookies and look human-like
+  // First, visit homepage to establish cookies and check if site is available
+  let siteAvailable = true;
   try {
-    console.log('   📍 Visiting homepage first...');
+    console.log('   📍 Checking if Astral site is available...');
     const initContext = await browser.newContext({
       locale: 'he-IL',
       timezoneId: 'Asia/Jerusalem',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     });
     const initPage = await initContext.newPage();
-    await initPage.goto('https://www.astralhotels.co.il/', { waitUntil: 'networkidle', timeout: 30000 });
-    await initPage.waitForTimeout(2000 + Math.random() * 2000);
+    const response = await initPage.goto('https://www.astralhotels.co.il/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Check if we got blocked or site is down
+    const pageContent = await initPage.content();
+    if (pageContent.includes('blocked') || pageContent.includes('Access Denied') || !response || response.status() >= 400) {
+      console.log('   ⚠️ Astral website is unavailable or blocking requests');
+      siteAvailable = false;
+    } else {
+      await initPage.waitForTimeout(2000 + Math.random() * 2000);
+      console.log('   ✓ Site is available');
+    }
     await initContext.close();
-    console.log('   ✓ Homepage visited');
   } catch (e) {
-    console.log(`   ⚠ Homepage visit failed: ${e.message}`);
+    console.log(`   ⚠️ Astral website unreachable: ${e.message}`);
+    siteAvailable = false;
+  }
+  
+  // If site is not available, return empty results
+  if (!siteAvailable) {
+    console.log('   ⏭️ Skipping Astral scraper - site unavailable');
+    await browser.close();
+    for (const dates of DATE_RANGES) {
+      results[HOTEL.name][dates.label] = null;
+    }
+    return results;
   }
   
   try {
