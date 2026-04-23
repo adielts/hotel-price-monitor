@@ -34,11 +34,18 @@ const DATE_RANGES = [
  * URL format discovered from actual Astral search
  */
 function buildSearchUrl(checkIn, checkOut) {
-  // roomsGuests is double-URL-encoded JSON
-  const roomsData = [{ adults: ADULTS, children: CHILDREN, infants: INFANTS }];
+  // roomsGuests - single URL encoding with children ages
+  // Format: adults, children count, infants count, plus ages array
+  const roomsData = [{ 
+    adults: ADULTS, 
+    children: CHILDREN, 
+    infants: INFANTS,
+    childrenAges: [5],  // Child age 5
+    infantsAges: [1]    // Infant age 1
+  }];
   const roomsJson = JSON.stringify(roomsData);
-  // Double encode: first encode, then encode again
-  const roomsEncoded = encodeURIComponent(encodeURIComponent(roomsJson));
+  // Single encode only
+  const roomsEncoded = encodeURIComponent(roomsJson);
   
   return `https://www.astralhotels.co.il/hotels/${HOTEL.slug}?hotelIdList=${HOTEL.hotelId}&fromDate=${checkIn}&toDate=${checkOut}&roomsGuests=${roomsEncoded}`;
 }

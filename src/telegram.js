@@ -15,7 +15,13 @@ const HOTEL_CONFIG = {
 
 // Guest configuration (matching scrapers)
 const ISROTEL_COMPOSITION = '2-1-1'; // 2 adults, 1 child, 1 infant
-const ASTRAL_ROOMS_DATA = [{ adults: 2, children: 1, infants: 1 }];
+const ASTRAL_ROOMS_DATA = [{ 
+  adults: 2, 
+  children: 1, 
+  infants: 1,
+  childrenAges: [5],
+  infantsAges: [1]
+}];
 
 /**
  * Build booking URL for a hotel and date range
@@ -35,9 +41,9 @@ function buildBookingUrl(hotelName, checkIn, checkOut) {
   }
   
   if (config.type === 'astral') {
-    // Astral URL format: YYYY-MM-DD with double-encoded roomsGuests
+    // Astral URL format: YYYY-MM-DD with single-encoded roomsGuests
     const roomsJson = JSON.stringify(ASTRAL_ROOMS_DATA);
-    const roomsEncoded = encodeURIComponent(encodeURIComponent(roomsJson));
+    const roomsEncoded = encodeURIComponent(roomsJson);
     return `https://www.astralhotels.co.il/hotels/${config.slug}?hotelIdList=${config.hotelId}&fromDate=${checkIn}&toDate=${checkOut}&roomsGuests=${roomsEncoded}`;
   }
   
