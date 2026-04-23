@@ -3,12 +3,16 @@
  * Scrapes prices from Astral website (Queen of Sheba)
  * Configuration: 2 adults + 1 child + 1 infant
  * 
- * Uses direct URL navigation (no calendar interaction needed!)
+ * Uses playwright-extra with stealth plugin to avoid bot detection
  */
 
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
+
+// Add stealth plugin to avoid detection
+chromium.use(StealthPlugin());
 
 // Hotel to monitor
 const HOTEL = {
@@ -70,8 +74,27 @@ async function saveScreenshot(page, name) {
 async function scrapePrice(browser, dates) {
   const context = await browser.newContext({
     locale: 'he-IL',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    viewport: { width: 1920, height: 1080 }
+    timezoneId: 'Asia/Jerusalem',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1,
+    hasTouch: false,
+    isMobile: false,
+    extraHTTPHeaders: {
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1'
+    }
   });
   
   const page = await context.newPage();
@@ -222,7 +245,7 @@ async function scrapePrice(browser, dates) {
  * Main scraping function
  */
 async function scrapeAstral() {
-  console.log('\n🏨 Starting Astral scraper (Direct URL method)...');
+  console.log('\n🏨 Starting Astral scraper (Stealth mode)...');
   console.log(`   Hotel: ${HOTEL.name}`);
   console.log(`   Guests: ${ADULTS} adults + ${CHILDREN} child + ${INFANTS} infant`);
   
@@ -232,16 +255,41 @@ async function scrapeAstral() {
   
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox', 
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process'
+    ]
   });
+  
+  // First, visit homepage to establish cookies and look human-like
+  try {
+    console.log('   📍 Visiting homepage first...');
+    const initContext = await browser.newContext({
+      locale: 'he-IL',
+      timezoneId: 'Asia/Jerusalem',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    });
+    const initPage = await initContext.newPage();
+    await initPage.goto('https://www.astralhotels.co.il/', { waitUntil: 'networkidle', timeout: 30000 });
+    await initPage.waitForTimeout(2000 + Math.random() * 2000);
+    await initContext.close();
+    console.log('   ✓ Homepage visited');
+  } catch (e) {
+    console.log(`   ⚠ Homepage visit failed: ${e.message}`);
+  }
   
   try {
     for (const dates of DATE_RANGES) {
       const price = await scrapePrice(browser, dates);
       results[HOTEL.name][dates.label] = price;
       
-      // Small delay between requests
-      await new Promise(r => setTimeout(r, 2000));
+      // Random delay between requests (3-6 seconds) to look more human
+      const delay = 3000 + Math.random() * 3000;
+      console.log(`    Waiting ${Math.round(delay/1000)}s before next request...`);
+      await new Promise(r => setTimeout(r, delay));
     }
   } finally {
     await browser.close();
