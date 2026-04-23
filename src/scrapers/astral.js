@@ -103,8 +103,36 @@ async function scrapePrice(browser, dates) {
     // Navigate directly to search results
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     
-    // Wait for content to load
-    await page.waitForTimeout(5000);
+    // Wait for prices to load - look for loading indicator to disappear or prices to appear
+    console.log(`    Waiting for prices to load...`);
+    
+    // Wait for loading indicator to disappear (text: "החיפוש שלך בדרך")
+    try {
+      await page.waitForFunction(() => {
+        const bodyText = document.body.innerText || '';
+        const isLoading = bodyText.includes('החיפוש שלך בדרך') || bodyText.includes('טוען');
+        const hasPrice = bodyText.includes('₪') || bodyText.match(/\d{1,2},\d{3}/);
+        return !isLoading || hasPrice;
+      }, { timeout: 30000 });
+    } catch (e) {
+      console.log(`    Loading indicator timeout, continuing...`);
+    }
+    
+    // Additional wait for dynamic content
+    await page.waitForTimeout(3000);
+    
+    // Wait for price elements to appear
+    try {
+      await page.waitForFunction(() => {
+        const bodyText = document.body.innerText || '';
+        return bodyText.includes('₪') || bodyText.match(/\d{1,2},\d{3}/);
+      }, { timeout: 15000 });
+    } catch (e) {
+      console.log(`    No price elements found after waiting`);
+    }
+    
+    // Final short wait for any animations
+    await page.waitForTimeout(2000);
     
     // Take screenshot
     await saveScreenshot(page, `astral-${dates.label.replace('/', '-')}`);
@@ -229,16 +257,6 @@ async function scrapeAstral() {
 module.exports = { scrapeAstral, HOTEL, DATE_RANGES };
 
 // Run directly if called as main
-if (require.main === module) {
-  scrapeAstral()
-    .then(results => {
-      console.log('\nFinal results:', JSON.stringify(results, null, 2));
-    })
-    .catch(err => {
-      console.error('Scraper failed:', err);
-      process.exit(1);
-    });
-}
 if (require.main === module) {
   scrapeAstral()
     .then(results => {
