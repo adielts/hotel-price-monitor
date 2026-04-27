@@ -71,7 +71,7 @@ async function main() {
     if (comparison.changes.length > 0) {
       message += '\n\n📈 <b>שינויים מהבדיקה הקודמת:</b>\n';
       for (const change of comparison.changes) {
-        const emoji = change.direction === 'up' ? '🔺' : '🔻';
+        const emoji = change.direction === 'up' ? '🔺' : '�⬇️';
         const sign = change.direction === 'up' ? '+' : '';
         message += `${emoji} ${change.hotel} (${change.dates}): ${sign}₪${Math.abs(change.diff)} (${sign}${change.percentChange}%)\n`;
       }
