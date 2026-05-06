@@ -1,6 +1,7 @@
 /**
  * Price History Chart Generator
- * Generates an interactive HTML chart from price history data
+ * Generates an interactive HTML chart for GitHub Pages (docs/index.html)
+ * Also generates a local copy for quick viewing (prices/chart.html)
  * Usage: npm run chart
  */
 
@@ -9,12 +10,33 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
-const OUTPUT_FILE = path.join(__dirname, '../prices/chart.html');
+const DOCS_DIR = path.join(__dirname, '../docs');
+const DOCS_FILE = path.join(DOCS_DIR, 'index.html');
+const LOCAL_FILE = path.join(__dirname, '../prices/chart.html');
 
-const COLORS = [
-  { line: 'rgb(54, 162, 235)', bg: 'rgba(54, 162, 235, 0.1)' },   // blue
-  { line: 'rgb(255, 99, 132)', bg: 'rgba(255, 99, 132, 0.1)' },   // red
-  { line: 'rgb(75, 192, 192)', bg: 'rgba(75, 192, 192, 0.1)' },   // teal
+// 9 distinct colors - 3 per hotel (dark/medium/light shades)
+const HOTEL_COLORS = {
+  'המלך שלמה': [
+    { line: 'rgb(30, 100, 200)', bg: 'rgba(30, 100, 200, 0.1)' },   // dark blue
+    { line: 'rgb(66, 153, 245)', bg: 'rgba(66, 153, 245, 0.1)' },   // medium blue
+    { line: 'rgb(130, 195, 255)', bg: 'rgba(130, 195, 255, 0.1)' },  // light blue
+  ],
+  'רויאל גארדן': [
+    { line: 'rgb(200, 30, 60)', bg: 'rgba(200, 30, 60, 0.1)' },     // dark red
+    { line: 'rgb(240, 80, 110)', bg: 'rgba(240, 80, 110, 0.1)' },   // medium red/pink
+    { line: 'rgb(255, 140, 160)', bg: 'rgba(255, 140, 160, 0.1)' }, // light pink
+  ],
+  'Queen of Sheba': [
+    { line: 'rgb(20, 140, 130)', bg: 'rgba(20, 140, 130, 0.1)' },   // dark teal
+    { line: 'rgb(60, 190, 180)', bg: 'rgba(60, 190, 180, 0.1)' },   // medium teal
+    { line: 'rgb(120, 220, 210)', bg: 'rgba(120, 220, 210, 0.1)' }, // light teal
+  ],
+};
+
+const FALLBACK_COLORS = [
+  { line: 'rgb(128, 128, 128)', bg: 'rgba(128, 128, 128, 0.1)' },
+  { line: 'rgb(160, 160, 160)', bg: 'rgba(160, 160, 160, 0.1)' },
+  { line: 'rgb(192, 192, 192)', bg: 'rgba(192, 192, 192, 0.1)' },
 ];
 
 function generateChart() {
@@ -29,49 +51,62 @@ function generateChart() {
   const hotels = Object.keys(history.entries[0].prices);
   const dateRanges = Object.keys(history.entries[0].prices[hotels[0]]);
 
-  // Build datasets per hotel
-  const chartsData = hotels.map(hotel => {
-    const datasets = dateRanges.map((dateRange, i) => {
+  // Build datasets - all hotels in one chart with distinct colors
+  const datasets = [];
+  hotels.forEach(hotel => {
+    const colors = HOTEL_COLORS[hotel] || FALLBACK_COLORS;
+    dateRanges.forEach((dateRange, i) => {
       const data = history.entries.map(entry => {
         const price = entry.prices[hotel]?.[dateRange];
         return {
           x: entry.timestamp,
-          y: price // null values will create gaps
+          y: price
         };
       }).filter(point => point.y !== null && point.y !== undefined);
 
-      return {
-        label: dateRange,
+      datasets.push({
+        label: `${hotel} (${dateRange})`,
         data,
-        borderColor: COLORS[i % COLORS.length].line,
-        backgroundColor: COLORS[i % COLORS.length].bg,
+        borderColor: colors[i % colors.length].line,
+        backgroundColor: colors[i % colors.length].bg,
         tension: 0.3,
         fill: false,
-        pointRadius: 4,
-        pointHoverRadius: 6,
-      };
+        pointRadius: 3,
+        pointHoverRadius: 7,
+        borderWidth: 2,
+      });
     });
-
-    return { hotel, datasets };
   });
 
-  const html = buildHtml(chartsData);
-  fs.writeFileSync(OUTPUT_FILE, html, 'utf8');
-  console.log(`Chart generated: ${OUTPUT_FILE}`);
+  const html = buildHtml(datasets);
 
-  // Open in default browser
-  const command = process.platform === 'win32' ? `start "" "${OUTPUT_FILE}"`
-    : process.platform === 'darwin' ? `open "${OUTPUT_FILE}"`
-    : `xdg-open "${OUTPUT_FILE}"`;
+  // Write to docs/ for GitHub Pages
+  if (!fs.existsSync(DOCS_DIR)) {
+    fs.mkdirSync(DOCS_DIR, { recursive: true });
+  }
+  fs.writeFileSync(DOCS_FILE, html, 'utf8');
+  console.log(`📊 Chart generated: ${DOCS_FILE}`);
 
-  exec(command, (err) => {
-    if (err) console.error('Could not open browser:', err.message);
-  });
+  // Also write local copy
+  fs.writeFileSync(LOCAL_FILE, html, 'utf8');
+  console.log(`📊 Local copy: ${LOCAL_FILE}`);
+
+  // Open in default browser (local usage only)
+  if (!process.env.CI) {
+    const command = process.platform === 'win32' ? `start "" "${LOCAL_FILE}"`
+      : process.platform === 'darwin' ? `open "${LOCAL_FILE}"`
+      : `xdg-open "${LOCAL_FILE}"`;
+
+    exec(command, (err) => {
+      if (err) console.error('Could not open browser:', err.message);
+    });
+  }
 }
 
-function buildHtml(chartsData) {
-  const chartsJson = JSON.stringify(chartsData);
+function buildHtml(datasets) {
+  const datasetsJson = JSON.stringify(datasets);
   const generatedAt = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+  const dataPoints = datasets[0]?.data?.length || 0;
 
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -107,81 +142,111 @@ function buildHtml(chartsData) {
       padding: 24px;
       margin-bottom: 24px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-      max-width: 900px;
+      max-width: 1000px;
       margin-left: auto;
       margin-right: auto;
     }
-    .chart-container h2 {
-      color: #34495e;
-      margin-bottom: 16px;
-      font-size: 1.3em;
-    }
     canvas { width: 100% !important; }
+    .legend-hint {
+      text-align: center;
+      color: #95a5a6;
+      font-size: 0.8em;
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
   <h1>📊 מעקב מחירי מלונות</h1>
-  <p class="subtitle">עודכן: ${generatedAt} | ${chartsData.length > 0 ? chartsData[0].datasets[0]?.data?.length || 0 : 0} נקודות נתונים</p>
+  <p class="subtitle">עודכן: ${generatedAt} | ${dataPoints} נקודות נתונים</p>
 
-  ${chartsData.map((chart, idx) => `
   <div class="chart-container">
-    <h2>${chart.hotel}</h2>
-    <canvas id="chart${idx}"></canvas>
-  </div>`).join('')}
+    <canvas id="priceChart"></canvas>
+    <p class="legend-hint">💡 לחצו על פריט ב-Legend כדי להסתיר/להציג קו. העבירו את האצבע על נקודה לפרטים.</p>
+  </div>
 
   <script>
-    const chartsData = ${chartsJson};
+    const datasets = ${datasetsJson};
 
-    chartsData.forEach((chartData, idx) => {
-      const ctx = document.getElementById('chart' + idx).getContext('2d');
-      new Chart(ctx, {
-        type: 'line',
-        data: {
-          datasets: chartData.datasets.map(ds => ({
-            ...ds,
-            data: ds.data.map(p => ({ x: new Date(p.x), y: p.y }))
-          }))
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: datasets.map(ds => ({
+          ...ds,
+          data: ds.data.map(p => ({ x: new Date(p.x), y: p.y }))
+        }))
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        interaction: {
+          mode: 'nearest',
+          intersect: false,
+          axis: 'x'
         },
-        options: {
-          responsive: true,
-          interaction: {
-            mode: 'index',
-            intersect: false,
-          },
-          plugins: {
-            legend: {
-              position: 'top',
-              labels: { font: { size: 13 } }
-            },
-            tooltip: {
-              callbacks: {
-                label: function(context) {
-                  return context.dataset.label + ': ₪' + context.parsed.y.toLocaleString();
-                }
-              }
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              font: { size: 12 },
+              padding: 16,
+              usePointStyle: true,
+              pointStyle: 'circle'
             }
           },
-          scales: {
-            x: {
-              type: 'time',
-              time: {
-                displayFormats: { hour: 'dd/MM HH:mm', day: 'dd/MM' }
+          tooltip: {
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            titleFont: { size: 13 },
+            bodyFont: { size: 13 },
+            padding: 12,
+            displayColors: true,
+            callbacks: {
+              title: function(items) {
+                if (!items.length) return '';
+                const d = new Date(items[0].parsed.x);
+                return d.toLocaleString('he-IL', {
+                  timeZone: 'Asia/Jerusalem',
+                  day: '2-digit', month: '2-digit', year: '2-digit',
+                  hour: '2-digit', minute: '2-digit'
+                });
               },
-              title: { display: true, text: 'תאריך בדיקה' }
-            },
-            y: {
-              title: { display: true, text: 'מחיר (₪)' },
-              ticks: {
-                callback: function(value) { return '₪' + value.toLocaleString(); }
+              label: function(context) {
+                const price = context.parsed.y;
+                return ' ' + context.dataset.label + ': ₪' + price.toLocaleString('he-IL');
               }
             }
           }
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: {
+              displayFormats: {
+                hour: 'dd/MM HH:mm',
+                day: 'dd/MM'
+              }
+            },
+            title: { display: true, text: 'תאריך בדיקה', font: { size: 13 } },
+            grid: { color: 'rgba(0,0,0,0.05)' }
+          },
+          y: {
+            title: { display: true, text: 'מחיר (₪)', font: { size: 13 } },
+            ticks: {
+              callback: function(value) { return '₪' + value.toLocaleString('he-IL'); }
+            },
+            grid: { color: 'rgba(0,0,0,0.05)' }
+          }
         }
-      });
+      }
     });
   </script>
 </body>
 </html>`;
 }
 
-generateChart();
+// Run if called directly
+if (require.main === module) {
+  generateChart();
+}
+
+module.exports = { generateChart };
