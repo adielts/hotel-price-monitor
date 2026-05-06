@@ -139,19 +139,27 @@ function buildHtml(datasets) {
     .chart-container {
       background: white;
       border-radius: 12px;
-      padding: 24px;
+      padding: 16px;
       margin-bottom: 24px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
       max-width: 1000px;
       margin-left: auto;
       margin-right: auto;
+      position: relative;
+      height: 70vh;
+      min-height: 400px;
     }
-    canvas { width: 100% !important; }
+    canvas { width: 100% !important; height: 100% !important; }
     .legend-hint {
       text-align: center;
       color: #95a5a6;
       font-size: 0.8em;
       margin-top: 10px;
+    }
+    @media (max-width: 600px) {
+      body { padding: 8px; }
+      h1 { font-size: 1.4em; }
+      .chart-container { padding: 10px; height: 60vh; min-height: 350px; }
     }
   </style>
 </head>
@@ -178,7 +186,7 @@ function buildHtml(datasets) {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: true,
+        maintainAspectRatio: false,
         interaction: {
           mode: 'nearest',
           intersect: false,
