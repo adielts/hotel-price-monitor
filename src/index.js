@@ -9,6 +9,7 @@ const { scrapeIsrotel } = require('./scrapers/isrotel');
 const { scrapeAstral } = require('./scrapers/astral');
 const { sendMessage, formatPriceUpdate, sendErrorNotification } = require('./telegram');
 const { addEntry, comparePrices, getLastPrices } = require('./history');
+const { generateChartUrl } = require('./quickchart');
 
 /**
  * Main execution function
@@ -83,6 +84,12 @@ async function main() {
       for (const error of errors) {
         message += `• ${error}\n`;
       }
+    }
+
+    // Generate chart link
+    const chartUrl = await generateChartUrl();
+    if (chartUrl) {
+      message += `\n\n📊 <a href="${chartUrl}">היסטוריית מחירים</a>`;
     }
     
     await sendMessage(message);

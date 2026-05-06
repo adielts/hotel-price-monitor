@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node src/test.js",
-    "debug": "cross-env HEADLESS=false node src/index.js"
+    "debug": "cross-env HEADLESS=false node src/index.js",
+    "chart": "node src/chart.js"
   },
   "keywords": [
     "hotel",

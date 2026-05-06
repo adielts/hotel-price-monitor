@@ -23,3 +23,6 @@ screenshots/
 # Playwright
 playwright-report/
 test-results/
+
+# Generated charts
+prices/chart.html
